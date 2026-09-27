@@ -1,0 +1,155 @@
+"""
+Monte Carlo Simulation - Problem 2: Stock Price Prediction
+Modul 3 Project - Week 6
+
+Model harga saham masa depan menggunakan Geometric Brownian Motion (GBM).
+Data historis diambil untuk mengestimasi drift dan volatilitas, lalu
+digunakan untuk mensimulasikan banyak kemungkinan lintasan harga.
+
+Cara pakai di Google Colab:
+    !pip install yfinance -q
+    (lalu jalankan seluruh cell ini)
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import yfinance as yf
+
+# ======================================================
+# 1. RETRIEVE HISTORICAL STOCK DATA
+# ======================================================
+TICKER = "AAPL"          # Ganti dengan ticker saham pilihanmu, misal "BBCA.JK"
+PERIOD = "1y"            # Rentang data historis (1 tahun)
+INTERVAL = "1d"          # Interval data (harian)
+
+
+def get_historical_data(ticker=TICKER, period=PERIOD, interval=INTERVAL):
+    """Download data harga penutupan (Close) historis menggunakan yfinance."""
+    data = yf.download(ticker, period=period, interval=interval)
+    return data["Close"].dropna()
+
+
+historical_prices = get_historical_data()
+print(f"Jumlah data historis: {len(historical_prices)} hari")
+print(historical_prices.tail())
+
+# ======================================================
+# 2. CALCULATE DRIFT AND VOLATILITY
+# ======================================================
+def calculate_drift_volatility(prices):
+    """
+    Hitung log-return harian dari data historis, lalu estimasi
+    drift (mu) dan volatilitas (sigma) harian.
+    """
+    log_returns = np.log(prices / prices.shift(1)).dropna()
+    mu = log_returns.mean()
+    sigma = log_returns.std()
+    return float(mu), float(sigma), log_returns
+
+
+mu, sigma, log_returns = calculate_drift_volatility(historical_prices)
+print(f"\nDrift harian (mu)         : {mu:.6f}")
+print(f"Volatilitas harian (sigma): {sigma:.6f}")
+print(f"Drift tahunan             : {mu * 252:.4%}")
+print(f"Volatilitas tahunan       : {sigma * np.sqrt(252):.4%}")
+
+# ======================================================
+# 3. MONTE CARLO SIMULATION (GBM)
+# ======================================================
+def monte_carlo_gbm(S0, mu, sigma, days=30, n_sims=10000, seed=42):
+    """
+    Simulasikan banyak lintasan harga saham menggunakan model GBM:
+        S(t+1) = S(t) * exp[(mu - 0.5*sigma^2) + sigma*Z],  Z ~ N(0,1)
+
+    Parameters
+    ----------
+    S0     : harga saham awal (harga penutupan terakhir)
+    mu     : drift harian (estimasi dari data historis)
+    sigma  : volatilitas harian (estimasi dari data historis)
+    days   : jumlah hari yang disimulasikan ke depan
+    n_sims : jumlah lintasan (jalur) simulasi
+
+    Returns
+    -------
+    price_paths : array berukuran (n_sims, days+1) berisi seluruh lintasan harga
+    """
+    rng = np.random.default_rng(seed)
+    Z = rng.standard_normal((n_sims, days))
+    daily_returns = (mu - 0.5 * sigma ** 2) + sigma * Z
+    log_paths = np.cumsum(daily_returns, axis=1)
+    price_paths = S0 * np.exp(log_paths)
+    price_paths = np.hstack([np.full((n_sims, 1), S0), price_paths])
+    return price_paths
+
+
+S0 = float(historical_prices.iloc[-1])   # harga terakhir sebagai titik awal simulasi
+FORECAST_DAYS = 30
+N_SIMULATIONS = 10000
+
+price_paths = monte_carlo_gbm(S0, mu, sigma, days=FORECAST_DAYS, n_sims=N_SIMULATIONS)
+final_prices = price_paths[:, -1]
+
+# ======================================================
+# 4. RESULT STATISTICS
+# ======================================================
+mean_final = final_prices.mean()
+median_final = np.median(final_prices)
+std_final = final_prices.std()
+p5, p25, p75, p95 = np.percentile(final_prices, [5, 25, 75, 95])
+prob_up = np.mean(final_prices > S0) * 100
+
+print(f"\n--- Hasil Simulasi {FORECAST_DAYS} Hari ({N_SIMULATIONS} lintasan) ---")
+print(f"Harga awal (S0)         : {S0:.2f}")
+print(f"Rata-rata harga akhir   : {mean_final:.2f}")
+print(f"Median harga akhir      : {median_final:.2f}")
+print(f"Standar deviasi         : {std_final:.2f}")
+print(f"Persentil 5%            : {p5:.2f}")
+print(f"Persentil 25%           : {p25:.2f}")
+print(f"Persentil 75%           : {p75:.2f}")
+print(f"Persentil 95%           : {p95:.2f}")
+print(f"Probabilitas harga naik : {prob_up:.2f}%")
+
+# ======================================================
+# 5. VISUALIZATION
+# ======================================================
+
+# --- Figure 1: Contoh lintasan harga hasil simulasi ---
+plt.figure(figsize=(10, 5))
+n_paths_to_plot = 100
+for i in range(n_paths_to_plot):
+    plt.plot(price_paths[i], linewidth=0.7, alpha=0.6)
+plt.axhline(S0, color="black", linestyle="--", label=f"Harga awal (${S0:.2f})")
+plt.title(f"Simulasi Monte Carlo - {n_paths_to_plot} Lintasan Harga Saham "
+          f"{TICKER} ({FORECAST_DAYS} Hari)")
+plt.xlabel("Hari ke-")
+plt.ylabel("Harga Saham ($)")
+plt.legend()
+plt.tight_layout()
+plt.savefig("simulasi_lintasan_harga.png", dpi=150)
+plt.show()
+
+# --- Figure 2: Histogram distribusi harga akhir ---
+plt.figure(figsize=(10, 5))
+plt.hist(final_prices, bins=50, edgecolor="black", alpha=0.7)
+plt.axvline(S0, color="black", linestyle="--", label=f"Harga awal (${S0:.2f})")
+plt.axvline(mean_final, color="red", linestyle="-", label=f"Rata-rata (${mean_final:.2f})")
+plt.title(f"Distribusi Harga Saham {TICKER} Setelah {FORECAST_DAYS} Hari "
+          f"({N_SIMULATIONS} Simulasi)")
+plt.xlabel("Harga Saham ($)")
+plt.ylabel("Frekuensi")
+plt.legend()
+plt.tight_layout()
+plt.savefig("distribusi_harga_akhir.png", dpi=150)
+plt.show()
+
+# ======================================================
+# 6. CATATAN KETERBATASAN (untuk bagian Discussion di report)
+# ======================================================
+# 1. Model GBM mengasumsikan return berdistribusi normal, sementara data
+#    riil sering memiliki "fat tails" (kejadian ekstrem lebih sering terjadi).
+# 2. Volatilitas diasumsikan konstan, padahal volatilitas riil berubah
+#    seiring waktu (volatility clustering).
+# 3. Model tidak memperhitungkan faktor eksternal seperti berita,
+#    laporan keuangan, atau kondisi makroekonomi.
+# 4. Estimasi mu dan sigma sangat bergantung pada periode data historis
+#    yang digunakan, sehingga hasil bisa bias jika periode tidak representatif.
